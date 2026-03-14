@@ -5,22 +5,49 @@ import { useState, useRef, useCallback, useEffect } from "react";
 interface SavedChapter {
   url: string;
   title: string;
-  originalText: string;
   simplifiedText: string;
   prevUrl: string | null;
   nextUrl: string | null;
   savedAt: number;
 }
 
+interface ReaderSettings {
+  bgColor: string;
+  fontSize: number;
+}
+
 const STORAGE_KEY = "novel-translator-chapters";
 const CURRENT_KEY = "novel-translator-current";
+const SETTINGS_KEY = "novel-translator-settings";
+
+const BG_OPTIONS = [
+  { bg: "#ffffff", text: "#1a1a1a", label: "White" },
+  { bg: "#f5f5dc", text: "#3b3024", label: "Sepia" },
+  { bg: "#d4edda", text: "#1b3a26", label: "Green" },
+  { bg: "#1a1a2e", text: "#d4d4d4", label: "Dark" },
+  { bg: "#0d0d0d", text: "#cccccc", label: "Black" },
+];
+
+function getTextColor(bgColor: string): string {
+  return BG_OPTIONS.find((o) => o.bg === bgColor)?.text ?? "#1a1a1a";
+}
+
+function getSettings(): ReaderSettings {
+  try {
+    return JSON.parse(localStorage.getItem(SETTINGS_KEY) || "null") ?? {
+      bgColor: "#f5f5dc",
+      fontSize: 18,
+    };
+  } catch {
+    return { bgColor: "#f5f5dc", fontSize: 18 };
+  }
+}
 
 function getSavedChapters(): SavedChapter[] {
   try {
     const chapters: SavedChapter[] = JSON.parse(
       localStorage.getItem(STORAGE_KEY) || "[]"
     );
-    // Ensure old saved chapters have nav fields
     return chapters.map((c) => ({
       ...c,
       prevUrl: c.prevUrl ?? null,
@@ -47,9 +74,14 @@ function deleteChapter(url: string) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(chapters));
 }
 
+function extractChapterNumber(title: string): number | null {
+  const match = title.match(/(?:ch(?:ương|apter|ap)?|chương)\s*(\d+)/i)
+    || title.match(/(\d+)/);
+  return match ? parseInt(match[1], 10) : null;
+}
+
 export default function Home() {
   const [url, setUrl] = useState("");
-  const [originalText, setOriginalText] = useState("");
   const [simplifiedText, setSimplifiedText] = useState("");
   const [fetching, setFetching] = useState(false);
   const [simplifying, setSimplifying] = useState(false);
@@ -58,12 +90,18 @@ export default function Home() {
   const [nextUrl, setNextUrl] = useState<string | null>(null);
   const [savedChapters, setSavedChapters] = useState<SavedChapter[]>([]);
   const [showSaved, setShowSaved] = useState(false);
+  const [chapterSearch, setChapterSearch] = useState("");
+  const [showSettings, setShowSettings] = useState(false);
+  const [settings, setSettings] = useState<ReaderSettings>({
+    bgColor: "#f5f5dc",
+    fontSize: 18,
+  });
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     setSavedChapters(getSavedChapters());
+    setSettings(getSettings());
 
-    // Restore last reading chapter
     const currentUrl = localStorage.getItem(CURRENT_KEY);
     if (currentUrl) {
       const chapters = getSavedChapters();
@@ -71,7 +109,6 @@ export default function Home() {
       if (chapter) {
         setUrl(chapter.url);
         setTitle(chapter.title);
-        setOriginalText(chapter.originalText);
         setSimplifiedText(chapter.simplifiedText);
         setPrevUrl(chapter.prevUrl || null);
         setNextUrl(chapter.nextUrl || null);
@@ -80,6 +117,12 @@ export default function Home() {
       }
     }
   }, []);
+
+  function updateSettings(patch: Partial<ReaderSettings>) {
+    const updated = { ...settings, ...patch };
+    setSettings(updated);
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(updated));
+  }
 
   const handleFetchAndSimplify = useCallback(
     async (targetUrl?: string) => {
@@ -91,7 +134,6 @@ export default function Home() {
       abortRef.current = controller;
 
       setFetching(true);
-      setOriginalText("");
       setSimplifiedText("");
       setTitle("");
       setPrevUrl(null);
@@ -109,14 +151,13 @@ export default function Home() {
 
         if (!fetchRes.ok) {
           const err = await fetchRes.json();
-          setOriginalText(
+          setSimplifiedText(
             `Error: ${err.error || "Failed to fetch content"}`
           );
           return;
         }
 
         const data = await fetchRes.json();
-        setOriginalText(data.text);
         setTitle(data.title || "");
         setPrevUrl(data.prevUrl || null);
         setNextUrl(data.nextUrl || null);
@@ -152,11 +193,9 @@ export default function Home() {
           }
         }
 
-        // Auto-save after simplification completes
         const chapter: SavedChapter = {
           url: fetchUrl,
           title: data.title || fetchUrl,
-          originalText: data.text,
           simplifiedText: result,
           prevUrl: data.prevUrl || null,
           nextUrl: data.nextUrl || null,
@@ -167,7 +206,7 @@ export default function Home() {
         localStorage.setItem(CURRENT_KEY, fetchUrl);
       } catch (e: unknown) {
         if (e instanceof Error && e.name !== "AbortError") {
-          setOriginalText("Error: Failed to process");
+          setSimplifiedText("Error: Failed to process");
         }
       } finally {
         setFetching(false);
@@ -177,17 +216,25 @@ export default function Home() {
     [url, fetching, simplifying]
   );
 
+  async function navigateToChapter(targetUrl: string) {
+    const saved = getSavedChapters().find((c) => c.url === targetUrl);
+    if (saved) {
+      await loadSavedChapter(saved);
+    } else {
+      handleFetchAndSimplify(targetUrl);
+    }
+  }
+
   async function loadSavedChapter(chapter: SavedChapter) {
     setUrl(chapter.url);
     setTitle(chapter.title);
-    setOriginalText(chapter.originalText);
     setSimplifiedText(chapter.simplifiedText);
     setPrevUrl(chapter.prevUrl || null);
     setNextUrl(chapter.nextUrl || null);
     setShowSaved(false);
+    setChapterSearch("");
     localStorage.setItem(CURRENT_KEY, chapter.url);
 
-    // If nav URLs are missing, fetch them from the page
     if (!chapter.prevUrl && !chapter.nextUrl) {
       try {
         const res = await fetch("/api/fetch-content", {
@@ -199,7 +246,6 @@ export default function Home() {
           const data = await res.json();
           setPrevUrl(data.prevUrl || null);
           setNextUrl(data.nextUrl || null);
-          // Update saved chapter with nav URLs
           const updated: SavedChapter = {
             ...chapter,
             prevUrl: data.prevUrl || null,
@@ -209,7 +255,7 @@ export default function Home() {
           setSavedChapters(getSavedChapters());
         }
       } catch {
-        // Ignore — nav just won't be available
+        // Ignore
       }
     }
   }
@@ -226,122 +272,270 @@ export default function Home() {
     }
   }
 
+  const filteredChapters = chapterSearch.trim()
+    ? savedChapters.filter((ch) => {
+        const searchNum = parseInt(chapterSearch, 10);
+        if (!isNaN(searchNum)) {
+          const chNum = extractChapterNumber(ch.title);
+          return chNum === searchNum;
+        }
+        return ch.title.toLowerCase().includes(chapterSearch.toLowerCase());
+      })
+    : savedChapters;
+
   const isLoading = fetching || simplifying;
   const buttonLabel = fetching
-    ? "Fetching content..."
+    ? "Fetching..."
     : simplifying
       ? "Simplifying..."
       : "Translate (⌘+Enter)";
 
+  const textColor = getTextColor(settings.bgColor);
+
+  const navButtons = (
+    <div className="flex justify-between py-3">
+      <button
+        onClick={() => prevUrl && navigateToChapter(prevUrl)}
+        disabled={!prevUrl || isLoading}
+        className="px-4 py-2 rounded-lg text-sm font-medium border transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+        style={{
+          borderColor: textColor + "30",
+          color: textColor,
+        }}
+      >
+        ← Previous
+      </button>
+      <button
+        onClick={() => nextUrl && navigateToChapter(nextUrl)}
+        disabled={!nextUrl || isLoading}
+        className="px-4 py-2 rounded-lg text-sm font-medium border transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+        style={{
+          borderColor: textColor + "30",
+          color: textColor,
+        }}
+      >
+        Next →
+      </button>
+    </div>
+  );
+
   return (
-    <main className="max-w-6xl mx-auto px-4 py-8">
-      <h1 className="text-2xl font-bold text-center mb-2">
-        Novel Translator
-      </h1>
-      {title && (
-        <p className="text-center text-lg text-gray-700 mb-4">{title}</p>
-      )}
+    <main
+      className="min-h-screen transition-colors duration-200"
+      style={{ backgroundColor: settings.bgColor, color: textColor }}
+    >
+      <div className="max-w-4xl mx-auto px-4 py-6">
+        <div className="flex items-center justify-between mb-4">
+          <h1 className="text-xl font-bold">Novel Translator</h1>
+          <div className="flex gap-2">
+            <button
+              onClick={() => { setShowSaved(!showSaved); setShowSettings(false); }}
+              className="px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors"
+              style={{
+                borderColor: textColor + "30",
+                color: textColor,
+                backgroundColor: settings.bgColor,
+              }}
+            >
+              Saved ({savedChapters.length})
+            </button>
+            <button
+              onClick={() => { setShowSettings(!showSettings); setShowSaved(false); }}
+              className="px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors"
+              style={{
+                borderColor: textColor + "30",
+                color: textColor,
+                backgroundColor: settings.bgColor,
+              }}
+            >
+              Settings
+            </button>
+          </div>
+        </div>
 
-      <div className="flex gap-2 mb-4">
-        <input
-          type="url"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Paste chapter link (tangthuvien.net, webnovel.vn, tvtruyen.com)..."
-          className="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-        />
-        <button
-          onClick={() => handleFetchAndSimplify()}
-          disabled={isLoading || !url.trim()}
-          className="px-6 py-2.5 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
-        >
-          {buttonLabel}
-        </button>
-        <button
-          onClick={() => setShowSaved(!showSaved)}
-          className="px-4 py-2.5 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200 transition-colors whitespace-nowrap border border-gray-300"
-        >
-          Saved ({savedChapters.length})
-        </button>
-      </div>
-
-      {showSaved && (
-        <div className="mb-4 border border-gray-200 rounded-lg bg-white max-h-64 overflow-auto">
-          {savedChapters.length === 0 ? (
-            <p className="p-4 text-gray-400 text-center">No saved chapters</p>
-          ) : (
-            savedChapters.map((ch) => (
-              <div
-                key={ch.url}
-                className="flex items-center justify-between px-4 py-3 border-b border-gray-100 last:border-b-0 hover:bg-gray-50"
-              >
-                <button
-                  onClick={() => loadSavedChapter(ch)}
-                  className="text-left flex-1 mr-4"
-                >
-                  <p className="text-sm font-medium text-gray-800 truncate">
-                    {ch.title}
-                  </p>
-                  <p className="text-xs text-gray-400">
-                    {new Date(ch.savedAt).toLocaleString()}
-                  </p>
-                </button>
-                <button
-                  onClick={() => handleDelete(ch.url)}
-                  className="text-xs text-red-500 hover:text-red-700 shrink-0"
-                >
-                  Delete
-                </button>
+        {showSettings && (
+          <div
+            className="mb-4 p-4 rounded-lg border"
+            style={{ borderColor: textColor + "20" }}
+          >
+            <div className="flex flex-col gap-4">
+              <div>
+                <label className="text-sm font-medium block mb-2">
+                  Background
+                </label>
+                <div className="flex gap-2">
+                  {BG_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.bg}
+                      onClick={() => updateSettings({ bgColor: opt.bg })}
+                      className="w-10 h-10 rounded-lg border-2 transition-transform"
+                      style={{
+                        backgroundColor: opt.bg,
+                        borderColor:
+                          settings.bgColor === opt.bg
+                            ? "#3b82f6"
+                            : textColor + "20",
+                        transform:
+                          settings.bgColor === opt.bg
+                            ? "scale(1.1)"
+                            : "scale(1)",
+                      }}
+                      title={opt.label}
+                    />
+                  ))}
+                </div>
               </div>
-            ))
+              <div>
+                <label className="text-sm font-medium block mb-2">
+                  Font size: {settings.fontSize}px
+                </label>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() =>
+                      updateSettings({
+                        fontSize: Math.max(12, settings.fontSize - 2),
+                      })
+                    }
+                    className="w-8 h-8 rounded border flex items-center justify-center"
+                    style={{ borderColor: textColor + "30", color: textColor }}
+                  >
+                    -
+                  </button>
+                  <input
+                    type="range"
+                    min={12}
+                    max={32}
+                    step={1}
+                    value={settings.fontSize}
+                    onChange={(e) =>
+                      updateSettings({ fontSize: parseInt(e.target.value, 10) })
+                    }
+                    className="flex-1"
+                  />
+                  <button
+                    onClick={() =>
+                      updateSettings({
+                        fontSize: Math.min(32, settings.fontSize + 2),
+                      })
+                    }
+                    className="w-8 h-8 rounded border flex items-center justify-center"
+                    style={{ borderColor: textColor + "30", color: textColor }}
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showSaved && (
+          <div
+            className="mb-4 rounded-lg border overflow-hidden"
+            style={{ borderColor: textColor + "20" }}
+          >
+            <div className="p-3 border-b" style={{ borderColor: textColor + "10" }}>
+              <input
+                type="text"
+                value={chapterSearch}
+                onChange={(e) => setChapterSearch(e.target.value)}
+                placeholder="Search by chapter number..."
+                className="w-full px-3 py-2 rounded border text-sm"
+                style={{
+                  backgroundColor: settings.bgColor,
+                  borderColor: textColor + "20",
+                  color: textColor,
+                }}
+              />
+            </div>
+            <div className="max-h-64 overflow-auto">
+              {filteredChapters.length === 0 ? (
+                <p
+                  className="p-4 text-center text-sm"
+                  style={{ color: textColor + "60" }}
+                >
+                  No chapters found
+                </p>
+              ) : (
+                filteredChapters.map((ch) => (
+                  <div
+                    key={ch.url}
+                    className="flex items-center justify-between px-4 py-3 border-b last:border-b-0"
+                    style={{ borderColor: textColor + "10" }}
+                  >
+                    <button
+                      onClick={() => loadSavedChapter(ch)}
+                      className="text-left flex-1 mr-4"
+                    >
+                      <p className="text-sm font-medium truncate">
+                        {ch.title}
+                      </p>
+                      <p
+                        className="text-xs"
+                        style={{ color: textColor + "60" }}
+                      >
+                        {new Date(ch.savedAt).toLocaleString()}
+                      </p>
+                    </button>
+                    <button
+                      onClick={() => handleDelete(ch.url)}
+                      className="text-xs text-red-500 hover:text-red-700 shrink-0"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className="flex gap-2 mb-4">
+          <input
+            type="url"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Paste chapter link..."
+            className="flex-1 px-4 py-2.5 rounded-lg border text-sm"
+            style={{
+              backgroundColor: settings.bgColor,
+              borderColor: textColor + "30",
+              color: textColor,
+            }}
+          />
+          <button
+            onClick={() => handleFetchAndSimplify()}
+            disabled={isLoading || !url.trim()}
+            className="px-5 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+          >
+            {buttonLabel}
+          </button>
+        </div>
+
+        {title && (
+          <h2
+            className="text-center text-lg font-semibold mb-4"
+            style={{ color: textColor }}
+          >
+            {title}
+          </h2>
+        )}
+
+        {navButtons}
+
+        <div
+          className="min-h-[60vh] px-2 py-4 whitespace-pre-wrap leading-relaxed"
+          style={{ fontSize: `${settings.fontSize}px` }}
+        >
+          {simplifiedText || (
+            <span style={{ color: textColor + "40" }}>
+              Content will appear here...
+            </span>
           )}
         </div>
-      )}
 
-      <div className="flex justify-between mb-4">
-        <button
-          onClick={() => prevUrl && handleFetchAndSimplify(prevUrl)}
-          disabled={!prevUrl || isLoading}
-          className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg font-medium hover:bg-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-        >
-          ← Previous Chapter
-        </button>
-        <button
-          onClick={() => nextUrl && handleFetchAndSimplify(nextUrl)}
-          disabled={!nextUrl || isLoading}
-          className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg font-medium hover:bg-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-        >
-          Next Chapter →
-        </button>
-      </div>
-
-      <div className="grid md:grid-cols-2 gap-4">
-        <div className="flex flex-col gap-2">
-          <label className="text-sm font-medium text-gray-600">
-            Original
-          </label>
-          <div className="w-full h-[70vh] p-4 border border-gray-200 rounded-lg bg-white overflow-auto whitespace-pre-wrap text-sm">
-            {originalText || (
-              <span className="text-gray-400">
-                Original content will appear here...
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <label className="text-sm font-medium text-gray-600">
-            Simplified
-          </label>
-          <div className="w-full h-[70vh] p-4 border border-gray-200 rounded-lg bg-white overflow-auto whitespace-pre-wrap text-sm">
-            {simplifiedText || (
-              <span className="text-gray-400">
-                Simplified text will appear here...
-              </span>
-            )}
-          </div>
-        </div>
+        {navButtons}
       </div>
     </main>
   );
