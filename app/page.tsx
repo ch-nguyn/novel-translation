@@ -126,7 +126,7 @@ export default function Home() {
                 data.chapterName,
                 settings.apiKey,
                 settings.aiModel,
-                "Dịch tiêu đề truyện sau từ tiếng Trung sang tiếng Việt phổ thông dễ hiểu. Giữ nguyên dấu '-' phân cách giữa tên truyện và tên chương. Chỉ trả về bản dịch, không giải thích."
+                "Dịch tiêu đề truyện sau từ tiếng Trung sang tiếng Việt (ưu tiên Hán Việt) phổ thông dễ hiểu. Giữ nguyên dấu '-' phân cách giữa tên truyện và tên chương. Chỉ trả về bản dịch, không giải thích."
               );
               const [tNovel,tChapter] = title.split(/\s*-\s*/);
 
