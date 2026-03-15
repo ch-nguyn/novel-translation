@@ -81,14 +81,13 @@ function parseHtml(html: string, siteConfig: SiteConfig, baseUrl: string) {
 
   const contentEl = $(siteConfig.content);
   if (!contentEl.length) {
-    throw new Error("Could not find chapter content on this page");
+    return null;
   }
 
   const text = contentEl.text();
   const titleStr = extractTitle($);
   let { prevUrl, nextUrl } = extractNav($);
 
-  // Make relative URLs absolute
   const origin = new URL(baseUrl).origin;
   if (prevUrl && !prevUrl.startsWith("http")) prevUrl = origin + prevUrl;
   if (nextUrl && !nextUrl.startsWith("http")) nextUrl = origin + nextUrl;
@@ -96,9 +95,63 @@ function parseHtml(html: string, siteConfig: SiteConfig, baseUrl: string) {
   return { text, titleStr, prevUrl, nextUrl };
 }
 
+async function fetchWithCheerio(url: string): Promise<string | null> {
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7,vi;q=0.6",
+      Referer: new URL(url).origin + "/",
+    },
+  });
+
+  if (!res.ok) return null;
+
+  const html = await res.text();
+  // Detect Cloudflare challenge page
+  if (html.includes("Just a moment") || html.includes("challenge-platform")) {
+    return null;
+  }
+  return html;
+}
+
+async function fetchWithPuppeteer(url: string, contentSelector: string): Promise<string> {
+  const puppeteer = await import("puppeteer");
+  const browser = await puppeteer.default.launch({
+    headless: true,
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-blink-features=AutomationControlled",
+    ],
+  });
+
+  try {
+    const page = await browser.newPage();
+    await page.setUserAgent(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    );
+
+    // Hide webdriver
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, "webdriver", { get: () => false });
+    });
+
+    await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
+
+    // Wait for content to appear (Cloudflare challenge may take a few seconds)
+    await page.waitForSelector(contentSelector, { timeout: 15000 });
+
+    return await page.content();
+  } finally {
+    await browser.close();
+  }
+}
+
 export async function POST(req: Request) {
   try {
-    const { url, html } = await req.json();
+    const { url, html: providedHtml } = await req.json();
 
     if (!url || typeof url !== "string") {
       return Response.json({ error: "Missing URL" }, { status: 400 });
@@ -113,35 +166,20 @@ export async function POST(req: Request) {
       );
     }
 
-    rewriteUrl(url);
+    const fetchUrl = rewriteUrl(url);
 
-    let pageHtml = html;
+    // 1. Use provided HTML if available
+    // 2. Try simple fetch
+    // 3. Fallback to Puppeteer for Cloudflare-protected sites
+    let pageHtml = providedHtml || (await fetchWithCheerio(fetchUrl));
 
-    // If no HTML provided, try fetching server-side
     if (!pageHtml) {
-      const res = await fetch(url, {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7,vi;q=0.6",
-          "Referer": new URL(url).origin + "/",
-        },
-      });
-
-      if (!res.ok) {
-        return Response.json(
-          { error: "BLOCKED", status: res.status },
-          { status: 200 }
-        );
-      }
-
-      pageHtml = await res.text();
+      pageHtml = await fetchWithPuppeteer(fetchUrl, siteConfig.content);
     }
 
-    const result = parseHtml(pageHtml, siteConfig, url);
+    const result = parseHtml(pageHtml, siteConfig, fetchUrl);
 
-    if (!result.text.trim()) {
+    if (!result || !result.text.trim()) {
       return Response.json(
         { error: "Could not find chapter content on this page" },
         { status: 422 }

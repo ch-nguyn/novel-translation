@@ -8,22 +8,14 @@ export interface FetchContentResult {
   lang: string;
 }
 
-async function fetchViaProxy(url: string): Promise<string> {
-  const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
-  const res = await fetch(proxyUrl);
-  if (!res.ok) throw new Error(`Proxy fetch failed: ${res.status}`);
-  return res.text();
-}
-
-async function parseContent(
+export async function fetchChapterContent(
   url: string,
-  html: string | null,
   signal?: AbortSignal
 ): Promise<FetchContentResult> {
   const res = await fetch("/api/fetch-content", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url, html }),
+    body: JSON.stringify({ url }),
     signal,
   });
 
@@ -33,12 +25,6 @@ async function parseContent(
   }
 
   const data = await res.json();
-
-  // Server returned BLOCKED — need client-side proxy
-  if (data.error === "BLOCKED") {
-    return null as unknown as FetchContentResult;
-  }
-
   return {
     text: data.text,
     title: data.title || "",
@@ -48,19 +34,6 @@ async function parseContent(
     nextUrl: data.nextUrl || null,
     lang: data.lang || "vi",
   };
-}
-
-export async function fetchChapterContent(
-  url: string,
-  signal?: AbortSignal
-): Promise<FetchContentResult> {
-  // Try server-side fetch first
-  const result = await parseContent(url, null, signal);
-  if (result) return result;
-
-  // Server was blocked — fetch via CORS proxy and send HTML for parsing
-  const html = await fetchViaProxy(url);
-  return parseContent(url, html, signal);
 }
 
 export async function translateTitle(
