@@ -139,10 +139,10 @@ export default function Home() {
           } catch { /* keep original */ }
         }
 
-        const savedTitle = data.novelName;
         saveChapter({
           url: fetchUrl,
-          title: savedTitle,
+          title: data.chapterName || chapterTitle || fetchUrl,
+          novelName: data.novelName || "",
           novelSlug: extractNovelSlug(fetchUrl),
           simplifiedText: result,
           prevUrl: data.prevUrl,
@@ -175,6 +175,8 @@ export default function Home() {
   async function loadSavedChapter(chapter: SavedChapter) {
     setUrl(chapter.url);
     setTitle(chapter.title);
+    setNovelName(chapter.novelName || "");
+    setChapterName(chapter.title || "");
     setSimplifiedText(chapter.simplifiedText);
     setPrevUrl(chapter.prevUrl || null);
     setNextUrl(chapter.nextUrl || null);

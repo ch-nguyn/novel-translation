@@ -50,6 +50,7 @@ export function getSavedChapters(): SavedChapter[] {
     );
     return chapters.map((c) => ({
       ...c,
+      novelName: c.novelName || "",
       novelSlug: c.novelSlug || extractNovelSlug(c.url),
       prevUrl: c.prevUrl ?? null,
       nextUrl: c.nextUrl ?? null,

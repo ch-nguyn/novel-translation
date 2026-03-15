@@ -1,6 +1,7 @@
 export interface SavedChapter {
   url: string;
   title: string;
+  novelName: string;
   novelSlug: string;
   simplifiedText: string;
   prevUrl: string | null;

@@ -19,13 +19,7 @@ interface Props {
 }
 
 function getNovelName(chapters: SavedChapter[]): string {
-  const title = chapters[0]?.title || "";
-  const cleaned = title
-    .replace(/\s*-?\s*[Cc]h(ương|apter|ap)?\.?\s*\d+.*/i, "")
-    .replace(/\s*[Cc]hương\s*\d+.*/i, "")
-    .replace(/\s*\/\s*$/, "")
-    .trim();
-  return cleaned || chapters[0]?.novelSlug || "Unknown";
+  return chapters[0]?.novelName || chapters[0]?.novelSlug || "Unknown";
 }
 
 function getNovels(chapters: SavedChapter[]): NovelInfo[] {
